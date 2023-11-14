@@ -98,9 +98,9 @@ class _InsertPositionAction(UndoableAction):
 
         return_value = f"Added {self.particle.position}"
         if len(self.particle.links) > 1:
-            return_value += " with connections to " + (" and ".join((str(p) for p in self.particle.links)))
+            return_value += " with links to " + (" and ".join((str(p) for p in self.particle.links)))
         if len(self.particle.links) == 1:
-            return_value += f" with a connection to {self.particle.links[0]}"
+            return_value += f" with a link to {self.particle.links[0]}"
 
         return return_value + "."
 
@@ -111,24 +111,24 @@ class _InsertPositionAction(UndoableAction):
 
 
 class _DeletePositionsAction(UndoableAction):
-    _particles: List[FullPositionSnapshot]
+    _snapshots: List[FullPositionSnapshot]
 
-    def __init__(self, particles: Iterable[FullPositionSnapshot]):
-        self._particles = list(particles)
+    def __init__(self, snapshots: Iterable[FullPositionSnapshot]):
+        self._snapshots = list(snapshots)
 
     def do(self, experiment: Experiment):
-        experiment.remove_positions((particle.position for particle in self._particles))
-        for particle in self._particles:  # Check linked particles for errors
+        experiment.remove_positions((particle.position for particle in self._snapshots))
+        for particle in self._snapshots:  # Check linked particles for errors
             cell_error_finder.find_errors_in_just_these_positions(experiment, *particle.links)
         cell_error_finder.find_errors_in_all_dividing_cells(experiment)
-        return f"Removed {len(self._particles)} positions"
+        return f"Removed {len(self._snapshots)} positions"
 
     def undo(self, experiment: Experiment):
-        for particle in self._particles:
+        for particle in self._snapshots:
             particle.restore(experiment)
             cell_error_finder.find_errors_in_just_these_positions(experiment, particle.position, *particle.links)
         cell_error_finder.find_errors_in_all_dividing_cells(experiment)
-        return f"Re-added {len(self._particles)} positions"
+        return f"Added {len(self._snapshots)} positions"
 
 
 class _MovePositionAction(UndoableAction):
@@ -149,7 +149,8 @@ class _MovePositionAction(UndoableAction):
         # Collect old link probabilities (for the undo functionality)
         self.old_link_probabilities = dict()
         for link in experiment.links.find_links_of(self.old_position):
-            self.old_link_probabilities[link] = experiment.link_data.get_link_data(self.old_position, link, "link_probability")
+            self.old_link_probabilities[link] = experiment.link_data.get_link_data(self.old_position, link,
+                                                                                   "link_probability")
 
     def do(self, experiment: Experiment):
         experiment.move_position(self.old_position, self.new_position)
@@ -165,9 +166,50 @@ class _MovePositionAction(UndoableAction):
     def undo(self, experiment: Experiment):
         experiment.move_position(self.new_position, self.old_position)
         for link in experiment.links.find_links_of(self.old_position):
-            experiment.link_data.set_link_data(self.old_position, link, "link_probability", self.old_link_probabilities.get(link))
+            experiment.link_data.set_link_data(self.old_position, link, "link_probability",
+                                               self.old_link_probabilities.get(link))
         cell_error_finder.find_errors_in_positions_links_and_all_dividing_cells(experiment, self.old_position)
         return f"Moved {self.new_position} back to {self.old_position}"
+
+
+class _MoveMultiplePositionsAction(UndoableAction):
+    """Used to move multiple positions by a (dx, dy, dz) offset."""
+
+    old_positions: List[Position]
+    dx: float
+    dy: float
+    dz: float
+
+    def __init__(self, old_positions: List[Position], *, dx: float = 0, dy: float = 0, dz: float = 0):
+        if len(old_positions) == 0:
+            raise ValueError("No positions supplied")
+        time_point_number = old_positions[0].time_point_number()
+        for old_position in old_positions:
+            if old_position.time_point_number() != time_point_number:
+                raise ValueError(
+                    f"{old_position} is not in time point number {time_point_number} (contrary to the first)")
+        self.old_positions = list(old_positions)
+        self.dx = dx
+        self.dy = dy
+        self.dz = dz
+
+    def do(self, experiment: Experiment):
+        new_positions = [position.with_offset(self.dx, self.dy, self.dz) for position in self.old_positions]
+        for old_position, new_position in zip(self.old_positions, new_positions):
+            experiment.move_position(old_position, new_position)
+
+        # Recheck errors
+        cell_error_finder.find_errors_in_positions_links_and_all_dividing_cells(experiment, *new_positions)
+        return f"Moved {len(new_positions)} position(s) by ({self.dx:01}, {self.dy:01}, {self.dz:01})"
+
+    def undo(self, experiment: Experiment):
+        new_positions = [position.with_offset(self.dx, self.dy, self.dz) for position in self.old_positions]
+        for old_position, new_position in zip(self.old_positions, new_positions):
+            experiment.move_position(new_position, old_position)
+
+        # Recheck errors
+        cell_error_finder.find_errors_in_positions_links_and_all_dividing_cells(experiment, *self.old_positions)
+        return f"Moved {len(new_positions)} position(s) back by ({self.dx:01}, {self.dy:01}, {self.dz:01})"
 
 
 class _MarkLineageEndAction(UndoableAction):
@@ -291,48 +333,70 @@ class _OverwritePositionAction(UndoableAction):
 class _MarkPositionAsSomethingAction(UndoableAction):
     #wat is het verschil tussen dit en setallastype
     _position: Position
+    _positions: List[Position]
     _name: str
 
-    def __init__(self, position: Position, data_name: str):
-        self._position = position
+    def __init__(self, positions: List[Position], data_name: str):
+        self._positions = list(positions)
         self._name = data_name
 
     def do(self, experiment: Experiment) -> str:
-        experiment.position_data.set_position_data(self._position, self._name, True)
+        for position in self._positions:
+            experiment.position_data.set_position_data(position, self._name, True)
         if self._name == linking_markers.UNCERTAIN_MARKER:
-            cell_error_finder.find_errors_in_just_these_positions(experiment, self._position)
-        return f"Marked {self._position} as {self._name}"
+            cell_error_finder.find_errors_in_just_these_positions(experiment, *self._positions)
+        if len(self._positions) == 1:
+            return f"Marked {self._positions[0]} as {self._name}"
+        return f"Marked {len(self._positions)} positions as {self._name}"
 
     def undo(self, experiment: Experiment) -> str:
-        experiment.position_data.set_position_data(self._position, self._name, None)
+        for position in self._positions:
+            experiment.position_data.set_position_data(position, self._name, None)
         if self._name == linking_markers.UNCERTAIN_MARKER:
-            cell_error_finder.find_errors_in_just_these_positions(experiment, self._position)
-        return f"Marked that {self._position} is no longer {self._name}"
+            cell_error_finder.find_errors_in_just_these_positions(experiment, *self._positions)
+        if len(self._positions) == 1:
+            return f"Marked that {self._positions[0]} is no longer {self._name}"
+        return f"Marked that {len(self._positions)} positions are no longer {self._name}"
 
 
 class LinkAndPositionEditor(AbstractEditor):
     """Editor for cell links and positions. Use the Insert or Enter key to insert new cells or links, and use the Delete
      or Backspace key to delete them."""
 
-    _selected1: Optional[Position] = None
-    _selected2: Optional[Position] = None
+    _selected: List[Position]
 
     def __init__(self, window: Window, *, selected_position: Optional[Position] = None):
         super().__init__(window)
 
-        self._selected1 = selected_position
+        self._selected = [] if selected_position is None else [selected_position]
+
+    def _get_figure_title(self) -> str:
+        title_start = "Editing time point " + str(self._time_point.time_point_number()) + "    (z=" + str(
+            self._z) + ")\n"
+        if len(self._selected) == 1:
+            return title_start + "1 position selected"
+        elif len(self._selected) > 1:
+            time_point_count = len({position.time_point_number() for position in self._selected})
+            time_point_text = "1 time point" if time_point_count == 1 else f"{time_point_count} time points"
+            return title_start + f"{len(self._selected)} positions selected across " + time_point_text
+        else:
+            return title_start
 
     def _draw_extra(self):
-        if self._selected1 is not None and not self._experiment.positions.contains_position(self._selected1):
-            self._selected1 = None
-        if self._selected2 is not None and not self._experiment.positions.contains_position(self._selected2):
-            self._selected2 = None
+        to_unselect = set()
+        for i in range(len(self._selected)):
+            selected = self._selected[i]
+            if self._experiment.positions.contains_position(selected):
+                self._draw_highlight(selected)
+            else:
+                to_unselect.add(selected)  # Position doesn't exist anymore, remove from selection
 
-        self._draw_highlight(self._selected1)
-        self._draw_highlight(self._selected2)
+        # Unselect positions that don't exist anymore
+        if len(to_unselect) > 0:
+            self._selected = [element for element in self._selected if element not in to_unselect]
 
     def _draw_highlight(self, position: Optional[Position]):
-        if position is None:
+        if position is None or abs(position.time_point_number() - self._time_point.time_point_number()) > 2:
             return
         color = core.COLOR_CELL_CURRENT
         if position.time_point_number() < self._time_point.time_point_number():
@@ -346,19 +410,25 @@ class LinkAndPositionEditor(AbstractEditor):
             return
         new_selection = self._get_position_at(event.xdata, event.ydata)
         if new_selection is None:
-            self._selected1, self._selected2 = None, None
+            self._selected.clear()
             self.draw_view()
-            self.update_status("Cannot find a cell here. Unselected both cells.")
+            self.update_status("Cannot find a cell here. Unselected all cells.")
             return
-        if new_selection == self._selected1:
-            self._selected1 = None  # Deselect
-        elif new_selection == self._selected2:
-            self._selected2 = None  # Deselect
+
+        if new_selection in self._selected:
+            self._selected.remove(new_selection)  # Deselect
         else:
-            self._selected2 = self._selected1
-            self._selected1 = new_selection
+            self._selected.append(new_selection)  # Select
         self.draw_view()
-        self.update_status("Selected:\n        " + self._position_string(self._selected1) + "\n        " + self._position_string(self._selected2))
+
+        if len(self._selected) <= 2:
+            selected_first = self._selected[0] if len(self._selected) > 0 else None
+            selected_second = self._selected[1] if len(self._selected) > 1 else None
+            self.update_status(
+                "Selected:\n        " + self._position_string(selected_first) + "\n        " + self._position_string(
+                    selected_second))
+        else:
+            self.update_status(f"Selected: {len(self._selected)} positions")
 
     def _position_string(self, position: Optional[Position]) -> str:
         """Gets a somewhat compact representation of the position. This will return its x, y, z, time point and some
@@ -375,7 +445,7 @@ class LinkAndPositionEditor(AbstractEditor):
             data_names = data_names[0:10]
             data_names.append("...")
         if len(data_names) > 0:
-            return_value += " (with " + ",".join(data_names) + ")"
+            return_value += " (with " + ", ".join(data_names) + ")"
         return return_value
 
     def get_extra_menu_options(self):
@@ -384,6 +454,7 @@ class LinkAndPositionEditor(AbstractEditor):
             "Edit//Experiment-Edit splines... [A]": self._show_spline_editor,
             "Edit//Experiment-Edit beacons... [B]": self._show_beacon_editor,
             "Edit//Experiment-Edit image offsets... [O]": self._show_offset_editor,
+            "Edit//Batch-Delete selected positions... [Ctrl+Delete]": self._try_delete_all_selected,
             "Edit//Batch-Batch deletion//Delete data of current time point": self._delete_data_of_time_point,
             "Edit//Batch-Batch deletion//Delete data of multiple time points...": self._delete_data_of_multiple_time_points,
             "Edit//Batch-Batch deletion//Delete all tracks with errors...": self._delete_tracks_with_errors,
@@ -401,9 +472,10 @@ class LinkAndPositionEditor(AbstractEditor):
             "Edit//LineageEnd-Mark as moving out of view [V]": lambda: self._try_set_end_marker(EndMarker.OUT_OF_VIEW),
             "Edit//LineageEnd-Remove end marker": lambda: self._try_set_end_marker(None),
             "Edit//Marker-Set color of lineage...": self._set_color_of_lineage,
-            "Edit//Marker-Delete entire lineage [Ctrl+Delete]": self._delete_selected_lineage,
+            "Select//Select-All positions in current time point [Ctrl+A]": self._select_all,
+            "Select//Select-Expand selection to entire track [T]": self._select_track,
             "View//Linking-Linking errors and warnings (E)": self._show_linking_errors,
-            "View//Linking-Lineage errors and warnings [T]": self._show_lineage_errors,
+            "View//Linking-Lineage errors and warnings": self._show_lineage_errors,
             "Navigate//Layer-Layer of selected position [Space]": self._move_to_z_of_selected_position,
         }
 
@@ -472,98 +544,158 @@ class LinkAndPositionEditor(AbstractEditor):
             self._try_insert(event)
         elif event.key == "delete" or event.key == "backspace":
             self._try_delete()
+        elif event.key == "ctrl+backspace":
+            self._try_delete_all_selected()  # Ctrl + Delete also works, but is registered using the menu
+        elif event.key == "alt+a":
+            self._try_move_selected(dx=-1)
+        elif event.key == "alt+s":
+            self._try_move_selected(dy=1)
+        elif event.key == "alt+d":
+            self._try_move_selected(dx=1)
+        elif event.key == "alt+w":
+            self._try_move_selected(dy=-1)
+        elif event.key == "alt+q":
+            self._try_move_selected(dz=-1)
+        elif event.key == "alt+e":
+            self._try_move_selected(dz=1)
         elif event.key == "shift":
-            if self._selected1 is None or self._selected2 is not None:
-                self.update_status("You need to have exactly one cell selected in order to move a cell.")
-            elif self._selected1.time_point() != self._time_point:
-                self.update_status(f"Cannot move {self._selected1} to this time point.")
+            if len(self._selected) != 1:
+                self.update_status("You need to have exactly one position selected in order to move it."
+                                   "\n  To move multiple positions at once, use Alt + A/S/D/W/Q/E.")
+            elif self._selected[0].time_point() != self._time_point:
+                self.update_status(f"Cannot move {self._selected[0]} to this time point.")
             else:
                 new_position = Position(event.xdata, event.ydata, self._z, time_point=self._time_point)
-                old_position = self._selected1
-                self._selected1 = None
+                old_position = self._selected[0]
+                self._selected.clear()
                 self._perform_action(_MovePositionAction(self._experiment, old_position, new_position))
         else:
             super()._on_key_press(event)
 
+    def _select_all(self):
+        self._selected = list(self._experiment.positions.of_time_point(self._time_point))
+        self.draw_view()
+        self.update_status(f"Selected all {len(self._selected)} positions of this time point.")
+
+    def _select_track(self):
+        if len(self._selected) == 0:
+            self.update_status("No positions selected. Cannot expand selection to entire track.")
+            return
+
+        to_select = set()
+        for position in self._selected:
+            track_of_position = self._experiment.links.get_track(position)
+            if track_of_position is None:
+                to_select.add(position)
+                continue
+            for track in track_of_position.find_all_previous_and_descending_tracks(include_self=True):
+                for some_position in track.positions():
+                    to_select.add(some_position)
+        difference_count = len(to_select) - len(self._selected)
+        if difference_count == 0:
+            self.update_status("Couldn't add any positions to the selection - any linked positions are already added.")
+            return
+        self._selected = list(to_select)
+        self.draw_view()
+        self.update_status(f"Added all {difference_count} positions that came before or after the selected positions.")
+
     def _move_to_position(self, position: Position) -> bool:
-        if position != self._selected1 and position != self._selected2:
+        if position not in self._selected:
             # Select that position
-            self._selected2 = self._selected1
-            self._selected1 = position
+            self._selected.append(position)
         return super()._move_to_position(position)
 
     def _move_to_z_of_selected_position(self):
-        if self._selected2 is None:
-            if self._selected1 is not None:
-                self._move_to_z(int(round(self._selected1.z)))
-                self.update_status("Moved to z-pos of selected position.")
-            else:
-                self.update_status("No position selected - cannot move to its z-layer.")
-        else:
-            self._move_to_z(int(round(0.5 * (self._selected1.z + self._selected2.z))))
-            self.update_status("Moved to average z-pos of selected positions.")
+        if len(self._selected) == 0:
+            self.update_status("No position selected - cannot move to its z-layer.")
+            return
+        if len(self._selected) == 1:
+            self._move_to_z(int(round(self._selected[0].z)))
+            self.update_status("Moved to z-pos of selected position.")
+            return
+        z_values = [position.z for position in self._selected]
+        z_mean = sum(z_values) / len(z_values)
+        self._move_to_z(int(round(z_mean)))
+        self.update_status("Moved to average z-pos of selected positions.")
 
     def _try_delete(self):
-        if self._selected1 is None:
+        if len(self._selected) == 0:
             self.update_status("You need to select a cell first")
-        elif self._selected2 is None:  # Delete cell and its links
-            particle_to_delete = FullPositionSnapshot.from_position(self._experiment, self._selected1)
-            self._perform_action(ReversedAction(_InsertPositionAction(particle_to_delete)))
-        elif self._experiment.connections.contains_connection(self._selected1, self._selected2):  # Delete a connection
-            position1, position2 = self._selected1, self._selected2
-            self._selected1, self._selected2 = None, None
-            self._perform_action(ReversedAction(_InsertConnectionAction(position1, position2)))
-        elif self._experiment.links.contains_link(self._selected1, self._selected2):  # Delete link between cells
-            position1, position2 = self._selected1, self._selected2
-            self._selected1, self._selected2 = None, None
-            self._perform_action(ReversedAction(_InsertLinkAction(position1, position2)))
+        elif len(self._selected) == 1:  # Delete cell and its links
+            snapshot_to_delete = FullPositionSnapshot.from_position(self._experiment, self._selected[0])
+            self._perform_action(ReversedAction(_InsertPositionAction(snapshot_to_delete)))
+        elif len(self._selected) == 2:
+            if self._experiment.connections.contains_connection(self._selected[0],
+                                                                self._selected[1]):  # Delete a connection
+                position1, position2 = self._selected
+                self._selected.clear()
+                self._perform_action(ReversedAction(_InsertConnectionAction(position1, position2)))
+            elif self._experiment.links.contains_link(self._selected[0],
+                                                      self._selected[1]):  # Delete link between cells
+                position1, position2 = self._selected
+                self._selected.clear()
+                self._perform_action(ReversedAction(_InsertLinkAction(position1, position2)))
+            else:
+                self.update_status("No link found between the two positions - nothing to delete.")
         else:
-            self.update_status("No link found between the two positions - nothing to delete")
+            self.update_status("Select a single position to delete it, or select two positions to delete the link or"
+                               " connection between them.\n    To delete all selected positions at once, press"
+                               " Ctrl+Delete.")
+
+    def _try_delete_all_selected(self):
+        if len(self._selected) == 0:
+            self.update_status("No positions selected - cannot delete anything.")
+            return
+        snapshots = [FullPositionSnapshot.from_position(self._experiment, position) for position in self._selected]
+        self._perform_action(_DeletePositionsAction(snapshots))
 
     def _try_set_end_marker(self, marker: Optional[EndMarker]):
-        if self._selected1 is None or self._selected2 is not None:
+        if len(self._selected) != 1:
             self.update_status("You need to have exactly one cell selected in order to set an end marker.")
             return
 
         links = self._experiment.links
-        if len(links.find_futures(self._selected1)) > 0:
-            self.update_status(f"The {self._selected1} is not a lineage end.")
+        if len(links.find_futures(self._selected[0])) > 0:
+            self.update_status(f"The {self._selected[0]} is not a lineage end.")
             return
-        current_marker = linking_markers.get_track_end_marker(self._experiment.position_data, self._selected1)
+        current_marker = linking_markers.get_track_end_marker(self._experiment.position_data, self._selected[0])
         if current_marker == marker:
             if marker is None:
                 self.update_status("There is no lineage ending marker here, cannot delete anything.")
             else:
                 self.update_status(f"This lineage end already has the {marker.get_display_name()} marker.")
             return
-        self._perform_action(_MarkLineageEndAction(self._selected1, marker, current_marker))
+        self._perform_action(_MarkLineageEndAction(self._selected[0], marker, current_marker))
 
-    def _try_mark_as(self, flag_name: Optional[str], value: bool):
+    def _try_mark_as(self, flag_name: Optional[str], new_value: bool):
         """Marks a position as having a certain flag. If the flag_name is None, the user will be prompted for a name."""
-        if self._selected1 is None or self._selected2 is not None:
-            self.update_status("You need to have exactly one cell selected.")
-            return
-
         update_menus = flag_name is None
         if flag_name is None:
-            flag_name = dialog.prompt_str("Flag name", "As what do you want to flag the position?\n\nYou can pick any"
-                                                       " name. Possible examples would be \"ablated\",\n\"responder\""
-                                                       " or \"proliferative\". These flags have no intrinsic\nmeaning,"
-                                                       " but you could use them from your own scripts.")
+            flag_name = dialog.prompt_str("Flag name", "As what do you want to flag the position(s)?\n\nYou can pick"
+                                                       " any name. Possible examples would be \"ablated\",\n"
+                                                       "\"responder\" or \"proliferative\". These flags have no"
+                                                       " intrinsic\nmeaning, but you could use them from your own"
+                                                       " scripts.")
             if flag_name is None:
                 return
 
         position_data = self._experiment.position_data
-        if bool(position_data.get_position_data(self._selected1, flag_name)) == value:
-            if value:
-                self.update_status(f"Selected position is already marked as {flag_name}.")
-            else:
-                self.update_status(f"Selected position is not marked as {flag_name}, cannot remove marker.")
-            return
-        if value:
-            self._perform_action(_MarkPositionAsSomethingAction(self._selected1, flag_name))
+        positions_that_need_changing = [selected for selected in self._selected
+                                        if bool(position_data.get_position_data(selected, flag_name)) != new_value]
+        insert = " is" if len(self._selected) == 1 else "s are"
+        if new_value:
+            # Mark all as True
+            if len(positions_that_need_changing) == 0:
+                self.update_status(f"Selected position{insert} already marked as {flag_name}.")
+                return
+            self._perform_action(_MarkPositionAsSomethingAction(positions_that_need_changing, flag_name))
         else:
-            self._perform_action(ReversedAction(_MarkPositionAsSomethingAction(self._selected1, flag_name)))
+            # Mark all as False
+            if len(positions_that_need_changing) == 0:
+                self.update_status(f"Selected position{insert} not marked as {flag_name}, cannot remove marker.")
+                return
+            self._perform_action(
+                ReversedAction(_MarkPositionAsSomethingAction(positions_that_need_changing, flag_name)))
 
         if update_menus:
             self._window.redraw_all()  # So that the new flag appears in the menus
@@ -633,18 +765,19 @@ class LinkAndPositionEditor(AbstractEditor):
 
     def _delete_positions_without_links(self):
         """Deletes all positions that have no links."""
-        particles_without_links = []
+        snapshots = []
         links = self._experiment.links
         for position in self._experiment.positions:
             if not links.contains_position(position):
-                particles_without_links.append(FullPositionSnapshot.from_position(self._experiment, position))
-        self._perform_action(_DeletePositionsAction(particles_without_links))
+                snapshots.append(FullPositionSnapshot.from_position(self._experiment, position))
+        self._perform_action(_DeletePositionsAction(snapshots))
 
     def _delete_unlikely_links(self):
         """Deletes all links with a low score"""
-        cutoff = dialog.prompt_float("Deleting unlikely links", "What is the minimum required likelihood for a link (0% - 100%)?"
-                            "\nLinks with a lower likelihood, as predicted by the neural network, will be removed.",
-                            minimum=0, maximum=100, decimals=1, default=10)
+        cutoff = dialog.prompt_float("Deleting unlikely links",
+                                     "What is the minimum required likelihood for a link (0% - 100%)?"
+                                     "\nLinks with a lower likelihood, as predicted by the neural network, will be removed.",
+                                     minimum=0, maximum=100, decimals=1, default=10)
         if cutoff is None:
             return  # Cancelled
         cutoff_fraction = cutoff / 100
@@ -652,7 +785,6 @@ class LinkAndPositionEditor(AbstractEditor):
         link_data = self._experiment.link_data
         for (position_a, position_b), value in link_data.find_all_links_with_data("link_probability"):
             if value < cutoff_fraction:
-
                 to_remove.append((position_a, position_b))
         self._perform_action(_DeleteLinksAction(link_data, to_remove))
 
@@ -701,34 +833,6 @@ class LinkAndPositionEditor(AbstractEditor):
         # Perform the deletion
         self._perform_action(_DeletePositionsAction(snapshots_to_delete))
 
-    def _delete_selected_lineage(self):
-        if self._selected1 is None:
-            raise UserError("No cell selected", "You need to select a cell first to delete all cells in that"
-                                                " lineage.")
-        if self._selected2 is not None:
-            raise UserError("Too many cell selected", "You have selected multiple cells - please select only one.")
-
-        experiment = self._experiment
-        particles_in_track = []
-
-        # Find all positions in the track (and descending tracks)
-        track = experiment.links.get_track(self._selected1)
-        if track is None:
-            particles_in_track.append(FullPositionSnapshot.from_position(experiment, self._selected1))
-        else:
-            # Find starter of lineage tree
-            previous_tracks = track.get_previous_tracks()
-            while len(previous_tracks) == 1:
-                track = previous_tracks.pop()
-                previous_tracks = track.get_previous_tracks()
-
-            # Find all positions in lineage tree
-            for some_track in track.find_all_descending_tracks(include_self=True):
-                for position in some_track.positions():
-                    particles_in_track.append(FullPositionSnapshot.from_position(experiment, position))
-
-        self._perform_action(_DeletePositionsAction(particles_in_track))
-
     def _delete_tracks_not_in_first_time_point(self):
         """Deletes all lineages where at least a single error was present."""
         if not dialog.prompt_yes_no("Warning", "Are you sure you want to delete all lineages that do not reach the"
@@ -742,39 +846,39 @@ class LinkAndPositionEditor(AbstractEditor):
         self.get_window().redraw_data()
 
     def _try_insert(self, event: LocationEvent):
-        if self._selected1 is None:
+        if len(self._selected) == 0:
             # Add new position without links
-            self._selected1 = Position(event.xdata, event.ydata, self._z, time_point=self._time_point)
+            self._selected.append(Position(event.xdata, event.ydata, self._z, time_point=self._time_point))
             mouse_position = self._get_position_at(event.xdata, event.ydata)
-            self._perform_action(_InsertPositionAction(FullPositionSnapshot.just_position(self._selected1)))
-        elif self._selected2 is None:
-            # Insert new position with link to self._selected1
+            self._perform_action(_InsertPositionAction(FullPositionSnapshot.just_position(self._selected[0])))
+        elif len(self._selected) == 1:
+            # Insert new position with link to self._selected[0]
             # Find at which position the mouse is pointing
             mouse_position = self._get_position_at(event.xdata, event.ydata)
             is_new_position = False
             if mouse_position is None or abs(mouse_position.time_point_number() -
-                                             self._selected1.time_point_number()) != 1:
+                                             self._selected[0].time_point_number()) != 1:
                 # Just create a new position, position on mouse is not suitable
                 mouse_position = Position(event.xdata, event.ydata, self._z, time_point=self._time_point)
                 is_new_position = True
-                if self._display_settings.show_next_time_point and self._selected1.time_point() == self._time_point:
+                if self._display_settings.show_next_time_point and self._selected[0].time_point() == self._time_point:
                     # Insert in next time point when showing two time points, and inserting in this time point wouldn't
                     # be possible
                     mouse_position = mouse_position.with_time_point_number(mouse_position.time_point_number() + 1)
 
-            if abs(mouse_position.time_point_number() - self._selected1.time_point_number()) == 1:
-                connection = self._selected1
+            if abs(mouse_position.time_point_number() - self._selected[0].time_point_number()) == 1:
+                connection = self._selected[0]
 
                 # Insert link from selected point to new point
                 if is_new_position:
-                    self._selected1 = mouse_position
+                    self._selected[0] = mouse_position
                     new_particle = FullPositionSnapshot.position_with_links(mouse_position, links=[connection])
                     self._perform_action(_InsertPositionAction(new_particle))
                 else:
                     # New point already exists, overwrite that point
                     old_particle = FullPositionSnapshot.from_position(self._experiment, mouse_position)
                     mouse_position = Position(event.xdata, event.ydata, self._z, time_point=mouse_position.time_point())
-                    self._selected1 = mouse_position
+                    self._selected[0] = mouse_position
                     new_particle = FullPositionSnapshot.position_with_links(mouse_position, links=[connection,
                                                                                                    *(link for link in
                                                                                                      old_particle.links
@@ -783,45 +887,77 @@ class LinkAndPositionEditor(AbstractEditor):
                     self._perform_action(_OverwritePositionAction(new_particle, old_particle))
             else:
                 inserting_position = Position(event.xdata, event.ydata, self._z, time_point=self._time_point)
-                if inserting_position.distance_um(self._selected1, ImageResolution.PIXELS) < 10:
+                if inserting_position.distance_um(self._selected[0], ImageResolution.PIXELS) < 10:
                     # Mouse is close to an existing position
                     self.update_status("Cannot insert a position here - too close to already selected position.")
                     return
-                self._selected1 = Position(event.xdata, event.ydata, self._z, time_point=self._time_point)
-                self._perform_action(_InsertPositionAction(FullPositionSnapshot.just_position(self._selected1)))
-        elif self._selected1.time_point_number() == self._selected2.time_point_number():
-            # Insert connection between two positions
-            if self._experiment.connections.contains_connection(self._selected1, self._selected2):
-                self.update_status("A connection already exists between the selected positions.")
-                return
-            position1, position2 = self._selected1, self._selected2
-            self._selected1, self._selected2 = None, None
-            self._perform_action(_InsertConnectionAction(position1, position2))
+                self._selected[0] = Position(event.xdata, event.ydata, self._z, time_point=self._time_point)
+                self._perform_action(_InsertPositionAction(FullPositionSnapshot.just_position(self._selected[0])))
+        elif len(self._selected) == 2:
+            if self._selected[0].time_point_number() == self._selected[1].time_point_number():
+                # Insert connection between two positions
+                if self._experiment.connections.contains_connection(self._selected[0], self._selected[1]):
+                    self.update_status("A connection already exists between the selected positions.")
+                    return
+                position1, position2 = self._selected
+                self._selected.clear()
+                self._perform_action(_InsertConnectionAction(position1, position2))
+            else:
+                # Insert link between two positions
+                if self._experiment.links.contains_link(self._selected[0], self._selected[1]):
+                    self.update_status("A link already exists between the selected positions.")
+                    return
+                position1, position2 = self._selected
+                self._selected.clear()
+                self._perform_action(_InsertLinkAction(position1, position2))
         else:
-            # Insert link between two positions
-            if self._experiment.links.contains_link(self._selected1, self._selected2):
-                self.update_status("A link already exists between the selected positions.")
-                return
-            position1, position2 = self._selected1, self._selected2
-            self._selected1, self._selected2 = None, None
-            self._perform_action(_InsertLinkAction(position1, position2))
+            time_point_number_of_selection = self._get_time_point_number_of_selection()
+            if time_point_number_of_selection is None:
+                self.update_status(f"You currently have {len(self._selected)} positions selected of multiple time"
+                                   f" points - cannot insert anything.")
+            elif time_point_number_of_selection == self._time_point.time_point_number():
+                self.update_status(f"You currently have {len(self._selected)} positions selected of the current time"
+                                   f" point. To insert connections between them, select only two at a time.")
+            elif abs(time_point_number_of_selection - self._time_point.time_point_number()) > 1:
+                self.update_status(f"You currently have {len(self._selected)} positions selected in a time point"
+                                   f" further away. Cannot insert them here.")
+            else:
+                # Copy over to this time point, with links to time_point_number_of_selection
+                new_position_snapshots = [FullPositionSnapshot.position_with_links(
+                    position=position.with_time_point(self._time_point), links=[position])
+                    for position in self._selected]
+                for position_snapshot in new_position_snapshots:
+                    if self._experiment.positions.contains_position(position_snapshot.position):
+                        raise UserError("Position already exists", "Cannot insert the selected positions in this time"
+                                                                   " point, as at least one position already exists."
+                                                                   " Maybe you copied the positions before?")
+                self._selected = [snapshot.position for snapshot in new_position_snapshots]
+                self._perform_action(ReversedAction(_DeletePositionsAction(new_position_snapshots)))
+
+    def _get_time_point_number_of_selection(self):
+        time_point_number_of_selection = self._selected[0].time_point_number()
+        for position in self._selected:
+            if position.time_point_number() != time_point_number_of_selection:
+                time_point_number_of_selection = None
+                break
+        return time_point_number_of_selection
 
     def _set_track_to_type(self, position_type: Optional[Marker]):
         """Sets all cells in the selected track to the given type."""
-        if self._selected1 is None:
+        if len(self._selected) == 0:
             self.update_status("You need to select a position first.")
             return
-        if self._selected2 is not None:
+        if len(self._selected) > 1:
             self.update_status("You have multiple positions selected - please unselect one.")
             return
 
-        positions = track_positions_finder.find_all_positions_in_track_of(self._experiment.links, self._selected1)
+        positions = track_positions_finder.find_all_positions_in_track_of(self._experiment.links, self._selected[0])
         old_position_types = position_markers.get_position_types(self._experiment.position_data, set(positions))
         self._perform_action(_SetAllAsType(old_position_types, position_type))
 
     def _set_position_to_type(self, position_type: Optional[Marker]):
         """Sets the selected cell to the given type."""
-        if self._selected1 is None:
+        if len(self._selected) == 0:
             self.update_status("You need to select a position first.")
             return
 
@@ -830,8 +966,10 @@ class LinkAndPositionEditor(AbstractEditor):
         #    self.update_status("You have multiple positions selected - please unselect one.")
         #    return
 
-        positions = {self._selected1}
+        positions = {self._selected}
         positions2 = {self._selected2}
+        positions = set(self._selected)
+
         old_position_types = position_markers.get_position_types(self._experiment.position_data, positions)
         old_position_types2 = position_markers.get_position_types(self._experiment.position_data, positions2)
         self._perform_action(_SetAllAsType(old_position_types, position_type))
@@ -881,15 +1019,15 @@ class LinkAndPositionEditor(AbstractEditor):
 
 
     def _set_color_of_lineage(self):
-        if self._selected1 is None:
+        if len(self._selected) == 0:
             self.update_status("You need to select a position first.")
             return
-        if self._selected2 is not None:
+        if len(self._selected) > 1:
             self.update_status("You have multiple positions selected - please unselect one.")
             return
 
         links = self._experiment.links
-        track = links.get_track(self._selected1)
+        track = links.get_track(self._selected[0])
         if track is None:
             self.update_status("Selected position has no links, so it has no lineage and therefore we cannot color it.")
             return
@@ -898,3 +1036,12 @@ class LinkAndPositionEditor(AbstractEditor):
         color = dialog.prompt_color("Choose a color for the lineage", old_color)
         if color is not None:
             self._perform_action(_SetLineageColor(track, old_color, color))
+
+    def _try_move_selected(self, *, dx: float = 0, dy: float = 0, dz: float = 0):
+        if len(self._selected) == 0:
+            self.update_status("No positions selected. Select at least one to move it.")
+            return
+
+        existing_positions = list(self._selected)
+        self._selected = [position.with_offset(dx=dx, dy=dy, dz=dz) for position in existing_positions]
+        self._perform_action(_MoveMultiplePositionsAction(existing_positions, dx=dx, dy=dy, dz=dz))

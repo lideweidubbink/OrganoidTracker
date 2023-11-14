@@ -1,10 +1,12 @@
 from typing import Optional, Dict, Any
 
+import matplotlib.colors
 import numpy
 from matplotlib import cm
 from matplotlib.backend_bases import MouseEvent
 from matplotlib.collections import LineCollection
 from matplotlib.colors import Colormap
+from matplotlib.patches import Rectangle
 from numpy import ndarray
 from tifffile import tifffile
 
@@ -136,6 +138,7 @@ class AbstractImageVisualizer(Visualizer):
         self._draw_data_axes()
         self._draw_beacons()
         self._draw_extra()
+        self._draw_legend()
         self._window.set_figure_title(self._get_figure_title())
 
         self._fig.canvas.draw()
@@ -148,16 +151,52 @@ class AbstractImageVisualizer(Visualizer):
             self._ax.imshow(self._image_slice_2d, cmap=self._color_map, extent=extent)
             self._ax.set_aspect("equal", adjustable="datalim")
 
+    def _draw_legend(self):
+        """Draws the little legend in the bottom right corner."""
+        legend_y = 0.05
+        self._ax.add_patch(Rectangle(xy=(0.895, legend_y * 1.8), width=0.105, height=-legend_y * 1.8, transform=self._fig.transFigure,
+                                     zorder=4, color="white", alpha=0.8))
+        self._ax.scatter([0.91], [legend_y], s=8**2, facecolor=core.COLOR_CELL_PREVIOUS, transform=self._fig.transFigure,
+                         edgecolors="black", linewidths=1, marker="o", zorder=4.5)
+        self._ax.scatter([0.945], [legend_y], s=7**2, facecolor=core.COLOR_CELL_CURRENT, transform=self._fig.transFigure,
+                         edgecolors="black", linewidths=1, marker="s", zorder=4.5)
+        self._ax.scatter([0.98], [legend_y], s=6**2, facecolor=core.COLOR_CELL_NEXT, transform=self._fig.transFigure,
+                         edgecolors="black", linewidths=1, marker="o", zorder=4.5)
+        self._ax.plot([0.91, 0.945], [legend_y, legend_y], transform=self._fig.transFigure, color=core.COLOR_CELL_PREVIOUS,
+                      linewidth=1, zorder=4.5)
+        self._ax.plot([0.945, 0.98], [legend_y, legend_y], transform=self._fig.transFigure, color=core.COLOR_CELL_NEXT,
+                       linewidth=1, zorder=4.5)
+        self._ax.text(0.9, legend_y + 0.015, f"t={self._time_point.time_point_number() - 1}", horizontalalignment="left",
+                      color="black", transform=self._fig.transFigure, zorder=4.5)
+        self._ax.text(0.99, legend_y + 0.015, f"t={self._time_point.time_point_number() + 1}", horizontalalignment="right",
+                      color="black", transform=self._fig.transFigure, zorder=4.5)
+
     def _draw_selection(self, position: Position, color: MPLColor):
         """Draws a marker for the given position that indicates that the position is selected. Subclasses can call this
         method to show a position selection.
 
         Note: this method will draw the selection marker even if the given position is in another time point, or even on
         a completely different z layer. So only call this method if you want to have a marker visible."""
-        dz = self._z - round(position.z)
         time_point_number = position.time_point_number()
         dt = 0 if time_point_number is None else self._time_point.time_point_number() - time_point_number
-        self._ax.plot(position.x, position.y, 'o', markersize=25, color=(0, 0, 0, 0), markeredgecolor=color, markeredgewidth=5)
+        marker_shape = 'o'
+        marker_size = 20
+        marker_alpha = 1
+        if dt < -1:
+            marker_size = 10
+            marker_alpha = 0.6
+        elif dt == -1:
+            marker_size = 15
+        elif dt == 0:
+            marker_shape = "s"
+        elif dt == 1:
+            marker_size = 25
+        elif dt > 1:
+            marker_size = 30
+            marker_alpha = 0.6
+        marker_color = matplotlib.colors.to_rgb(color) + (marker_alpha,)
+        self._ax.plot(position.x, position.y, marker_shape, markersize=marker_size, color=(0, 0, 0, 0),
+                      markeredgecolor=marker_color, markeredgewidth=5)
 
     def _draw_beacons(self):
         for beacon in self._experiment.beacons.of_time_point(self._time_point):
@@ -280,7 +319,7 @@ class AbstractImageVisualizer(Visualizer):
             positions_edge_colors.append(edge_color)
             positions_edge_widths.append(edge_width)
             dz_penalty = 0 if dz == 0 else abs(dz) + 1
-            positions_marker_sizes.append(max(1, 7 - dz_penalty - abs(dt) + edge_width) ** 2)
+            positions_marker_sizes.append(max(1, 7 - dz_penalty - dt + edge_width) ** 2)
 
         self._ax.scatter(crosses_x_list, crosses_y_list, marker='X', facecolor='black', edgecolors="white",
                          s=17**2, linewidths=2)
