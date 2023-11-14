@@ -127,7 +127,7 @@ def get_normalized_intensity_over_time(experiment: Experiment, around_position: 
     return IntensityOverTime(times_h, intensities)
 
 
-def set_raw_intensities(experiment: Experiment, raw_intensities: Dict[Position, float], volumes: Dict[Position, int],
+def set_raw_intensities(experiment: Experiment, raw_intensities: Dict[Position, int], volumes: Dict[Position, int],
                         *, intensity_key: str = DEFAULT_INTENSITY_KEY):
     """Registers the given intensities for the given positions. Both dicts must have the same keys.
 
@@ -160,8 +160,8 @@ def remove_intensities(experiment: Experiment, *, intensity_key: str = DEFAULT_I
 def get_intensity_keys(experiment: Experiment) -> List[str]:
     """Gets the keys of all stored intensities.
 
-    Any key (for example "intensity") that is numeric and also has a "_volume" counterpart (like "intensity_volume") is
-    seen as being an intensity.
+    In the past, this list did not exist. For backwards compatibility, we check whether there are any
+    intensities saved under the default key "intensity", and if yes, we automatically add that to this list.
     """
     return_list = list()
     names_and_types = experiment.position_data.get_data_names_and_types()

@@ -1,6 +1,6 @@
 """Lineage tree visualizer with a lot of options for showing colors, showing hiding certain trees, etc."""
 
-from typing import Dict, Any, Tuple, Optional, List
+from typing import Dict, Any, Tuple, Optional
 
 import matplotlib.cm
 import matplotlib.colors
@@ -238,11 +238,6 @@ class LineageTreeVisualizer(Visualizer):
         for next_track in linking_track.get_next_tracks():
             self._give_lineage_color(next_track, color)
 
-    def _get_sorted_tracks(self) -> List[LinkingTrack]:
-        links = self._experiment.links
-        links.sort_tracks_by_x()
-        return list(links.find_starting_tracks())
-
     def draw_view(self):
         self._clear_axis()
 
@@ -252,10 +247,11 @@ class LineageTreeVisualizer(Visualizer):
         except UserError:
             display_timings = None
         position_data = experiment.position_data
+        links = experiment.links
+        if links.get_highest_track_id() > 4000:
+            raise ValueError(f"Lineage tree is too complex to display ({links.get_highest_track_id()} ids)")
 
-        tracks = self._get_sorted_tracks()
-        if len(tracks) > 4000:
-            raise ValueError(f"Lineage tree is too complex to display ({len(tracks)} tracks)")
+        links.sort_tracks_by_x()
 
         self._calculate_track_colors()
         axis_positions, highest_axis_position = self._calculate_axis_positions_if_enabled()
@@ -292,7 +288,7 @@ class LineageTreeVisualizer(Visualizer):
             return 0, 0, 0  # Default is black
 
         self._location_map = LocationMap()
-        width = LineageDrawing(tracks).draw_lineages_colored(self._ax, color_getter=color_getter,
+        width = LineageDrawing(links).draw_lineages_colored(self._ax, color_getter=color_getter,
                                                             timings=display_timings,
                                                             location_map=self._location_map,
                                                             lineage_filter=self._lineage_filter,

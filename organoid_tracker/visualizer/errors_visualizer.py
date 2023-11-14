@@ -15,7 +15,7 @@ from organoid_tracker.visualizer.position_list_visualizer import PositionListVis
 class ErrorsVisualizer(PositionListVisualizer):
     """Shows all errors and warnings in the experiment.
     Press Left/Right to view the previous/next error.
-    Press Delete or Backspace to delete (suppress) the shown error.
+    Press Delete to delete (suppress) the shown error.
     Press C to change (fix) the data and press E to exit this view.
     """
 
@@ -36,8 +36,7 @@ class ErrorsVisualizer(PositionListVisualizer):
         display_settings = window.display_settings
         self._problematic_lineages = lineage_error_finder.get_problematic_lineages(links, position_data, crumb_positions,
                                              min_time_point=display_settings.error_correction_min_time_point,
-                                             max_time_point=display_settings.error_correction_max_time_point,
-                                             min_divisions=display_settings.error_correction_min_divisions)
+                                             max_time_point=display_settings.error_correction_max_time_point)
         self._total_number_of_warnings = sum((len(lineage.errored_positions) for lineage in self._problematic_lineages))
 
         super().__init__(window, chosen_position=start_position, all_positions=[])
@@ -69,9 +68,8 @@ class ErrorsVisualizer(PositionListVisualizer):
             "Edit//Errors-Recheck all errors": self._recheck_errors,
             "Edit//Error settings-Change minimum allowed time in between divisions...": self._change_min_division_time,
             "Edit//Error settings-Change maximum allowed movement per minute...": self._change_max_distance,
-            "Filter//Time-Change minimum time point for correction...": self._change_min_time_point,
-            "Filter//Time-Change maximum time point for correction...": self._change_max_time_point,
-            "Filter//Lineage-Ignore lineages with too few divisions...": self._change_min_divisions,
+            "Edit//Correction settings-Change minimum time point for correction...": self._change_min_time_point,
+            "Edit//Correction settings-Change maximum time point for correction...": self._change_max_time_point,
             "Navigate//Lineage-Next lineage [Up]": self.__goto_next_lineage,
             "Navigate//Lineage-Previous lineage [Down]": self.__goto_previous_lineage
         }
@@ -140,24 +138,6 @@ class ErrorsVisualizer(PositionListVisualizer):
         self._recalculate_errors()
         self.update_status("Now checking errors up too and including time point " + str(answer) + ".")
 
-    def _change_min_divisions(self):
-        # Find the current value
-        current_min_divisions = self.get_window().display_settings.error_correction_min_divisions
-
-        # Update new value
-        answer = dialog.prompt_int("Error checking", "How many divisions must a lineage have in order to be included?",
-                                   default=current_min_divisions, minimum=0, maximum=100)
-        if answer is None:
-            return
-        self.get_window().display_settings.error_correction_min_divisions = answer
-        self._recalculate_errors()
-        if answer == 0:
-            self.update_status("Now including all lineages again.")
-        elif answer == 1:
-            self.update_status("Now only including lineages with at least 1 division.")
-        else:
-            self.update_status("Now only including lineages with at least " + str(answer) + " divisions.")
-
     def _get_error_checking_time_points(self) -> Tuple[int, int]:
         """Gets the min and max time point used for error checking. If no positions are loaded, arbitrary values are
         returned."""
@@ -215,8 +195,6 @@ class ErrorsVisualizer(PositionListVisualizer):
     def _on_key_press(self, event: KeyEvent):
         if event.key == "e":
             self._exit_view()
-        elif event.key == "backspace":
-            self._suppress_error()  # The Delete key also works, but that key is registered through the menu
         else:
             super()._on_key_press(event)
 

@@ -149,11 +149,6 @@ class LinkingTrack:
         """Gets the time this track takes in time points. This is simply the number of recorded positions."""
         return len(self._positions_by_time_point)
 
-    def will_divide(self) -> bool:
-        """Checks whether there are at least two next tracks. Faster than calling len(track.get_next_tracks()) > 1,
-        since this method doesn't create a set."""
-        return len(self._next_tracks) > 1
-
 
 class Links:
     """Represents all links between positions at different time points. This is used to follow particles over time. If a
@@ -798,14 +793,3 @@ class Links:
 
             yield track.find_position_at_time_point_number(time_point_number)
             time_point_number += 1
-
-    def move_in_time(self, time_point_delta: int):
-        """Moves all data with the given time point delta."""
-        # We need to update self._tracks and rebuild self._position_to_track
-        self._position_to_track.clear()
-        for track in self._tracks:
-            track._min_time_point_number += time_point_delta
-            for i, position in enumerate(track._positions_by_time_point):
-                moved_position = position.with_time_point_number(position.time_point_number() + time_point_delta)
-                track._positions_by_time_point[i] = moved_position
-                self._position_to_track[moved_position] = track
