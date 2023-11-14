@@ -7,7 +7,7 @@ FILE_TO_CELL_TYPE = {
     "stemcell.p": "STEM",
     "tuft.p": "TUFT",
     "young.p": "WGA_PLUS"
-}
+} #lidewei: i think i can add cell types here
 
 # Map of CELL_TYPE to file_name.p
 CELL_TYPE_TO_FILE = dict(((cell_type, file_name) for file_name, cell_type in FILE_TO_CELL_TYPE.items()))

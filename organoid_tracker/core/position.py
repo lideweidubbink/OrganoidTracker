@@ -189,3 +189,8 @@ class Position:
 
     def to_vector_um(self, resolution: ImageResolution) -> Vector3:
         return Vector3(self.x * resolution.pixel_size_x_um, self.y * resolution.pixel_size_y_um, self.z * resolution.pixel_size_z_um)
+
+
+
+    def _set_name(self):
+        return

@@ -470,6 +470,7 @@ def _encode_position(position: Position) -> Dict[str, Any]:
         }
 
 
+#lidewei: wellicht gebruiken
 def _encode_connections_to_json(connections: Connections) -> Dict[str, List[List[Dict]]]:
     connections_dict = dict()
     for time_point in connections.time_points():
@@ -514,6 +515,7 @@ def _encode_image_filters_to_json(filters: ImageFilters) -> Dict[str, Any]:
     return result_dict
 
 
+#lidewei: wellicht gebruiken
 def save_data_to_json(experiment: Experiment, json_file_name: str):
     """Saves positions, shapes, scores and links to a JSON file. The file should end with the extension FILE_EXTENSION.
     """
@@ -588,6 +590,21 @@ def save_data_to_json(experiment: Experiment, json_file_name: str):
     _write_json_to_file(json_file_name, save_data)
     if os.path.exists(json_file_name_old):
         os.remove(json_file_name_old)
+
+
+
+#lidewei: hier morgen mee verder
+def save_connections_to_json(experiment: Experiment, json_file_name: str):
+    """Saves positions, shapes, scores and links to a JSON file. The file should end with the extension FILE_EXTENSION.
+    """
+    # Record where file has been saved to
+    experiment.last_save_file = json_file_name
+
+    save_data = {"version": "v1"}
+    if experiment.connections.has_connections():
+        save_data["connections"] = _encode_connections_to_json(experiment.connections)
+
+
 
 
 def _read_json_from_file(file_name: str) -> Dict[str, Any]:

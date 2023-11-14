@@ -5,6 +5,10 @@ from typing import Dict, Any, List, Optional
 
 import numpy
 
+#lidewei: try to make tables
+# 1. with cells: cell_id, position x, y, z, cell_type
+# 2. with connections: cell_id, neighbor_id
+
 from organoid_tracker.core import UserError
 from organoid_tracker.core.experiment import Experiment
 from organoid_tracker.core.links import Links
@@ -30,6 +34,9 @@ def get_menu_items(window: Window) -> Dict[str, Any]:
             lambda: _export_positions_um_as_csv(window, metadata=False),
         "File//Export-Export positions//CSV, as μm coordinates with metadata...":
             lambda: _export_positions_um_as_csv(window, metadata=True),
+        "File//Export-Export neighbor connections (CSV)":
+            lambda: _export_connections_um_as_csv(window),
+
     }
 
 
@@ -45,6 +52,8 @@ class _BuiltInDataNames(Enum):
     hours_until_division = auto()
     hours_until_dead = auto()
     hours_since_division = auto()
+    cell_id = auto() #lidewei this
+    neighbor_id = auto() #lidewei added this
 
 def _get_data_names(window: Window) -> List[str]:
     answers = set()
@@ -91,6 +100,12 @@ def _export_positions_px_as_csv(window: Window):
 def _export_positions_um_as_csv(window: Window, *, metadata: bool):
     experiments = list(window.get_active_experiments())
     for experiment in experiments:
+
+
+        # lidewei added: gives names to every position
+        give_names(window)
+
+
         if not experiment.positions.has_positions():
             raise UserError("No positions are found", f"No annotated positions are found in experiment"
                                                       f" \"{experiment.name}\". Cannot export anything.")
@@ -115,6 +130,75 @@ def _export_positions_um_as_csv(window: Window, *, metadata: bool):
         _export_help_file(folder)
         dialog.popup_message("Positions", "Exported all positions, as well as a help file with instructions on how to"
                                           " visualize the points in Paraview.")
+
+
+
+    #lidewei
+def give_names(window: Window):
+    i=0
+    experiment = window.get_experiment()
+    for time_point in experiment.positions.time_points():
+        positions_of_time_point = experiment.positions.of_time_point(time_point)
+        for position in positions_of_time_point:
+            position_markers.set_position_name(experiment.position_data, position, i) #what is experiment
+            #print(i, position_markers.get_position_name(experiment.position_data, position))
+            i += 1
+    return
+
+
+#lidewei
+def _export_connections_um_as_csv(window: Window):
+    #with_type: bool --> to also attach the types
+
+    experiments = list(window.get_active_experiments())
+    for experiment in experiments:
+
+        # gives names to every position
+        give_names(window)
+
+        if not experiment.positions.has_positions():
+            raise UserError("No positions are found", f"No annotated positions are found in experiment"
+                                                      f" \"{experiment.name}\". Cannot export anything.")
+
+    folder = dialog.prompt_save_file("Select a directory", [("Folder", "*")])
+    if folder is None:
+        return
+
+    for i, experiment in enumerate(experiments):
+        positions_folder = folder if len(experiments) == 1 else os.path.join(folder, str(i + 1) + ". " + experiment.name.get_save_name())
+        os.makedirs(positions_folder, exist_ok=True)
+
+        positions = experiment.positions
+        connect = experiment.connections
+
+        file_prefix = experiment.name.get_save_name() + ".csv."
+        for time_point in positions.time_points():
+            file_name = os.path.join(folder, file_prefix + str(time_point.time_point_number()))
+            with open(file_name, "w") as file_handle:
+                file_handle.write("cell_id, neighbor_id, cell_type, neighbor_type\n")
+                for position in positions.of_time_point(time_point):
+                    name = position_markers.get_position_name(experiment.position_data, position)
+
+                    #ADD TYPE
+                    position_type = position_markers.get_position_type(experiment.position_data, position)
+
+
+                    if connect.is_connected(position):
+                        connections = list(connect.find_connections(position))
+                        for connection in connections:
+                            print(connection, "connection")
+                            neighbor = position_markers.get_position_name(experiment.position_data, connection)
+                            print(neighbor, "neighbor")
+
+                            #ADD TYPE
+                            neighbor_type = position_markers.get_position_type(experiment.position_data, connection)
+
+                            file_handle.write(f"{name},{neighbor}, {position_type}, {neighbor_type}\n")
+
+    #if i want an explanation file added use something like this:
+        #_export_help_file(folder)
+        dialog.popup_message("Connections", "Exported all connections.")
+
 
 
 def _export_help_file(folder: str, links: Optional[Links] = None):
@@ -270,6 +354,7 @@ class _AsyncExporter(Task):
             os.makedirs(folder, exist_ok=True)
             experiment.links.sort_tracks_by_x()
 
+
             _write_positions_and_metadata_to_csv(self._data_names, experiment.positions, experiment.position_data,
                    experiment.links, experiment.images.resolution(), self._cell_types_to_id,
                    experiment.division_lookahead_time_points, folder, experiment.name.get_save_name())
@@ -306,6 +391,9 @@ def _get_metadata(position: Position, data_name: str, positions: PositionCollect
     if data_name == "cell_type_id":
         cell_type_id = cell_types_to_id.get_or_add_id(
             position_markers.get_position_type(position_data, position))
+        #print(cell_type_id, "type")
+        #print(type(cell_type_id))
+
         return cell_type_id
 
     if data_name == "density_mm1":
@@ -323,6 +411,20 @@ def _get_metadata(position: Position, data_name: str, positions: PositionCollect
     if data_name == "times_neighbor_died":
         times_neighbor_died = deaths_nearby_tracks.count_nearby_deaths_in_past(links, position)
         return times_neighbor_died
+
+
+#lidewei
+    if data_name == "cell_id":
+        cell_id = position_markers.get_position_name(position_data, position)
+
+        #print(cell_id, "cell id")
+        #print(type(cell_id), "cell id")
+        return cell_id
+
+# lidewei
+    if data_name == "neighbor_id":
+        neighbor_id = deaths_nearby_tracks.count_nearby_deaths_in_past(links, position)
+        return neighbor_id
 
     if data_name == "cell_compartment_id":
         from organoid_tracker.linking_analysis import cell_compartment_finder
@@ -356,7 +458,10 @@ def _get_metadata(position: Position, data_name: str, positions: PositionCollect
             return hours_since_division
         return hours_until_dead
 
+
+
     return position_data.get_position_data(position, data_name)
+
 
 
 def _write_positions_and_metadata_to_csv(data_names: List[str], positions: PositionCollection,
@@ -422,3 +527,6 @@ def _str(value: Optional[float]) -> str:
     if value is None:
         return "NaN"
     return str(value)
+
+
+

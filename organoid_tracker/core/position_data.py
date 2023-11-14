@@ -99,6 +99,7 @@ class PositionData:
                 yield data_name, data_value
 
     def add_positions_data(self, data_name: str, data_set: Dict[Position, DataType]):
+        #lidewei: this could be quite helpfull
         """Bulk-addition of position data. Should be much faster that adding everything individually."""
         existing_data_set = self._position_data.get(data_name)
         if existing_data_set is None:

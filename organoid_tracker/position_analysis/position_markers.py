@@ -28,7 +28,28 @@ def set_position_type(position_data: PositionData, position: Position, type: Opt
     position_data.set_position_data(position, "type", type_str)
 
 
-def get_position_types(position_data: PositionData, positions: Set[Position]) -> Dict[Position, Optional[str]]:
+
+#lidewei
+def get_position_name(position_data: PositionData, position: Position) -> Optional[int]:
+    """Gets the name of the cell in integer, interpreted as the intestinal organoid cell type."""
+    name = position_data.get_position_data(position, "name")
+    if name is None:
+        return None
+    #print(name, "get position name")
+    #print(type(name), "get position name")
+    return name
+
+
+#lidewei hier verder gaan
+def set_position_name(position_data: PositionData, position: Position, name: Optional[int]):
+    """Sets the name of the cell. Set to None to delete the cell name."""
+    name_str = int(name) if name is not None else None
+    position_data.set_position_data(position, "name", name_str)
+    #print(name_str, "set position name")
+    #print(type(name), "set position name")
+
+
+def get_position_types(position_data: PositionData, positions: Set[Position]) -> Dict[Position, Optional[int]]:
     """Gets all known cell types of the given positions, with the names in UPPERCASE."""
     types = dict()
     for position in positions:

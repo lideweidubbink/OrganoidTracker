@@ -3,7 +3,7 @@ from typing import Optional, List, Dict, Iterable, Tuple
 from matplotlib.backend_bases import KeyEvent, MouseEvent, LocationEvent
 
 from organoid_tracker import core
-from organoid_tracker.core import Color, UserError, TimePoint
+from organoid_tracker.core import Color, UserError, TimePoint, position_data
 from organoid_tracker.core.experiment import Experiment
 from organoid_tracker.core.full_position_snapshot import FullPositionSnapshot
 from organoid_tracker.core.link_data import LinkData
@@ -215,6 +215,7 @@ class _InsertConnectionAction(UndoableAction):
 
 
 class _SetAllAsType(UndoableAction):
+    #lidewei: heel erg handig voor types!
     _previous_position_types: Dict[Position, str]
     _type: Optional[Marker]
 
@@ -288,6 +289,7 @@ class _OverwritePositionAction(UndoableAction):
 
 
 class _MarkPositionAsSomethingAction(UndoableAction):
+    #wat is het verschil tussen dit en setallastype
     _position: Position
     _name: str
 
@@ -416,6 +418,8 @@ class LinkAndPositionEditor(AbstractEditor):
             remove_action = lambda bound_flag_name=flag_name: self._try_mark_as(bound_flag_name, False)
             options["Edit//Marker-Flag position as//Action-Remove flag//Type-" + flag_name] = remove_action
 
+
+
         # Add options for changing position types
         for position_type in self.get_window().registry.get_registered_markers(Position):
             # Create copy of position_type variable to avoid it changing in loop iteration
@@ -423,8 +427,36 @@ class LinkAndPositionEditor(AbstractEditor):
             options["Edit//Marker-Set type of track//Type-" + position_type.display_name] = track_action
             position_action = lambda bound_position_type=position_type: self._set_position_to_type(bound_position_type)
             options["Edit//Marker-Set type of position//Type-" + position_type.display_name] = position_action
+
+
+        # lidewei: Add options for changing the type of a batch of position - positions of current time point & multiple
+            # time points & inside or outside a rectangle
+            batch_one_time_position_action = lambda bound_position_type=position_type: self._set_type_data_of_time_point(bound_position_type)
+            options["Edit//Marker-Set type of positions of current time point//Type-" + position_type.display_name] = batch_one_time_position_action
+            batch_multiple_time_position_action = lambda bound_position_type=position_type: self._set_type_data_of_multiple_time_points(bound_position_type)
+            options["Edit//Marker-Set type of positions of multiple time points//Type-" + position_type.display_name] = batch_multiple_time_position_action
+            batch_rectangle_position_action = lambda bound_position_type=position_type: self._show_positions_in_rectangle_type(bound_position_type)
+            options["Edit//Marker-Set type of positions in rectangle//Type-" + position_type.display_name] = batch_rectangle_position_action
+
+
+    # lidewei: add option to press '1' and the position (or two positions) will become a paneth cell
+        # and '2' becomes a stem cell
+        panethCell = self._window.registry.get_marker_by_save_name("PANETH")
+        stemCell = self._window.registry.get_marker_by_save_name("STEM")
+        paneth_position_action = lambda bound_position_type=position_type: self._set_position_to_type(panethCell)
+        options["Edit//Marker-Set type of position to Paneth cell [1]"] = paneth_position_action
+        stem_position_action = lambda bound_position_type=position_type: self._set_position_to_type(stemCell)
+        options["Edit//Marker-Set type of position to Stem cell [2]"] = stem_position_action
+
+
+        #remover options
         options["Edit//Marker-Set type of track//Clear-Remove type"] = lambda: self._set_track_to_type(None)
         options["Edit//Marker-Set type of position//Clear-Remove type"] = lambda: self._set_position_to_type(None)
+        options["Edit//Marker-Set type of positions of current time point//Clear-Remove type"] = lambda: self._set_type_data_of_time_point(None) #lidewei
+        options["Edit//Marker-Set type of positions of multiple time points//Clear-Remove type"] = lambda: self._set_type_data_of_multiple_time_points(None) #lidewei
+        options["Edit//Marker-Set type of positions in rectangle//Clear-Remove type"] = lambda: self._show_positions_in_rectangle_type(None) #lidewei
+
+
         return options
 
     def _on_key_press(self, event: KeyEvent):
@@ -566,11 +598,14 @@ class LinkAndPositionEditor(AbstractEditor):
         editor = PositionsInRectangleDeleter(self._window)
         activate(editor)
 
+
     def _delete_data_of_time_point(self):
         """Deletes all annotations of a given time point."""
         positions = self._experiment.positions.of_time_point(self._time_point)
         snapshots = (FullPositionSnapshot.from_position(self._experiment, position) for position in positions)
         self._perform_action(_DeletePositionsAction(snapshots))
+
+
 
     def _delete_data_of_multiple_time_points(self):
         """Deletes all annotations of a given time point range."""
@@ -789,13 +824,61 @@ class LinkAndPositionEditor(AbstractEditor):
         if self._selected1 is None:
             self.update_status("You need to select a position first.")
             return
-        if self._selected2 is not None:
-            self.update_status("You have multiple positions selected - please unselect one.")
-            return
+
+        # lidewei:
+        #if self._selected2 is not None:
+        #    self.update_status("You have multiple positions selected - please unselect one.")
+        #    return
 
         positions = {self._selected1}
+        positions2 = {self._selected2}
+        old_position_types = position_markers.get_position_types(self._experiment.position_data, positions)
+        old_position_types2 = position_markers.get_position_types(self._experiment.position_data, positions2)
+        self._perform_action(_SetAllAsType(old_position_types, position_type))
+        self._perform_action(_SetAllAsType(old_position_types2, position_type))
+
+
+#lidewei
+    def _set_type_data_of_time_point(self, position_type: Optional[Marker]):
+        """Sets type of data of current time point """
+        positions = self._experiment.positions.of_time_point(self._time_point)
         old_position_types = position_markers.get_position_types(self._experiment.position_data, positions)
         self._perform_action(_SetAllAsType(old_position_types, position_type))
+
+#lidewei
+    def _set_type_data_of_multiple_time_points(self, position_type: Optional[Marker]):
+        """Sets type of data of a given time point range."""
+        minimum, maximum = self._experiment.first_time_point_number(), self._experiment.last_time_point_number()
+        if minimum is None or maximum is None:
+            raise UserError("No data loaded", "No time points found. Did you load any data?")
+
+        time_point_number_start = dialog.prompt_int("Start time point",
+                                                    "At which time point should we start the giving positions a type?",
+                                                    minimum=minimum, maximum=maximum,
+                                                    default=self._time_point.time_point_number())
+        if time_point_number_start is None:
+            return
+        time_point_number_end = dialog.prompt_int("End time point",
+                                                  "Up to and including which time point should we give the positions a type?",
+                                                  minimum=time_point_number_start, maximum=maximum,
+                                                  default=time_point_number_start)
+        if time_point_number_end is None:
+            return
+        snapshots = [] #i think delete
+        for time_point_number in range(time_point_number_start, time_point_number_end + 1):
+            positions = self._experiment.positions.of_time_point(TimePoint(time_point_number))
+            old_position_types = position_markers.get_position_types(self._experiment.position_data, positions)
+            snapshots += [FullPositionSnapshot.from_position(self._experiment, position) for position in positions] #don't know about this line
+            self._perform_action(_SetAllAsType(old_position_types, position_type))
+
+
+       #lidewei
+    def _show_positions_in_rectangle_type(self, position_type: Optional[Marker]):
+        from organoid_tracker.visualizer.position_in_rectangle_type import PositionsInRectangleType
+        editor = PositionsInRectangleType(self._window, position_type)
+        activate(editor)
+
+
 
     def _set_color_of_lineage(self):
         if self._selected1 is None:

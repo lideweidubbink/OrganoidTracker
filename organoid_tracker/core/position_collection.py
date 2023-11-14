@@ -281,3 +281,5 @@ class PositionCollection:
             else:
                 # All time points, all z
                 return len(self)
+
+
